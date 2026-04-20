@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FaceLink — Instant Face Recognition Hub</title>
+<meta name="description" content="Real-time face recognition with instant actions: view info, open web, play video, make payments.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.1.0/dist/blazeface.min.js"></script>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0a0a0f;--surface:#12121a;--card:#1a1a28;--card-hover:#222235;
+    --border:rgba(255,255,255,.06);--border-glow:rgba(110,90,255,.35);
+    --text:#e8e8f0;--text-dim:#888899;--text-muted:#555566;
+    --accent:#7c5cfc;--accent-light:#9b82ff;--accent-dark:#5a3dd6;
+    --green:#22d67a;--green-dim:rgba(34,214,122,.12);
+    --red:#ff4466;--red-dim:rgba(255,68,102,.12);
+    --blue:#3b9eff;--blue-dim:rgba(59,158,255,.12);
+    --orange:#ff9f43;--orange-dim:rgba(255,159,67,.12);
+    --radius:16px;--radius-sm:10px;--radius-xs:6px;
+    --shadow:0 8px 32px rgba(0,0,0,.45);
+    --glass:rgba(18,18,26,.72);--glass-border:rgba(255,255,255,.08);
+  }
+  html{font-size:16px}
+  body{
+    font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);
+    min-height:100vh;overflow-x:hidden;
+  }
+
+  /* ─── Animated Background ─── */
+  .bg-grid{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:
+      radial-gradient(circle at 20% 30%,rgba(124,92,252,.08) 0%,transparent 50%),
+      radial-gradient(circle at 80% 70%,rgba(59,158,255,.06) 0%,transparent 50%);
+  }
+  .bg-grid::before{
+    content:'';position:absolute;inset:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);
+    background-size:64px 64px;
+    animation:gridPulse 8s ease-in-out infinite alternate;
+  }
+  @keyframes gridPulse{0%{opacity:.5}100%{opacity:1}}
+
+  /* ─── Header ─── */
+  header{
+    position:relative;z-index:10;display:flex;align-items:center;justify-content:space-between;
+    padding:20px 32px;border-bottom:1px solid var(--border);
+    background:var(--glass);backdrop-filter:blur(24px);
+  }
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo-icon{
+    width:42px;height:42px;border-radius:12px;
+    background:linear-gradient(135deg,var(--accent),var(--blue));
+    display:grid;place-items:center;font-size:20px;
+    box-shadow:0 0 20px rgba(124,92,252,.3);
+  }
+  .logo h1{font-size:1.35rem;font-weight:700;letter-spacing:-.5px}
+  .logo h1 span{color:var(--accent-light)}
+  .header-status{display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--text-dim)}
+  .status-dot{
+    width:8px;height:8px;border-radius:50%;
+    transition:background .4s,box-shadow .4s;
+  }
+  .status-dot.active{background:var(--green);box-shadow:0 0 10px var(--green)}
+  .status-dot.inactive{background:var(--red);box-shadow:0 0 10px var(--red)}
+  .status-dot.loading{background:var(--orange);box-shadow:0 0 10px var(--orange);animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.3}}
+
+  /* ─── Main Layout ─── */
+  main{
+    position:relative;z-index:5;
+    display:grid;grid-template-columns:1fr 380px;gap:24px;
+    max-width:1320px;margin:0 auto;padding:28px 32px;
+    min-height:calc(100vh - 82px);
+  }
+  @media(max-width:960px){
+    main{grid-template-columns:1fr;padding:16px}
+  }
+
+  /* ─── Camera Section ─── */
+  .camera-section{display:flex;flex-direction:column;gap:18px}
+  .camera-wrapper{
+    position:relative;border-radius:var(--radius);overflow:hidden;
+    background:#000;aspect-ratio:4/3;
+    border:1px solid var(--border);
+    box-shadow:var(--shadow),0 0 60px rgba(124,92,252,.06);
+  }
+  #webcam{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}
+  #overlay{
+    position:absolute;inset:0;width:100%;height:100%;
+    pointer-events:none;transform:scaleX(-1);
+  }
+  .camera-placeholder{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:16px;
+    background:linear-gradient(135deg,#0d0d14,#14142a);
+  }
+  .camera-placeholder svg{width:64px;height:64px;opacity:.25}
+  .camera-placeholder p{color:var(--text-muted);font-size:.9rem}
+
+  /* Scan line effect */
+  .scan-line{
+    position:absolute;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent-light),transparent);
+    opacity:0;pointer-events:none;z-index:2;
+    box-shadow:0 0 20px var(--accent);
+  }
+  .scan-line.active{
+    opacity:.7;
+    animation:scanDown 2.5s ease-in-out infinite;
+  }
+  @keyframes scanDown{0%{top:-2px}100%{top:100%}}
+
+  /* Camera controls */
+  .cam-controls{display:flex;gap:10px;flex-wrap:wrap}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:11px 22px;border-radius:var(--radius-sm);
+    font-family:inherit;font-size:.85rem;font-weight:600;
+    cursor:pointer;border:1px solid var(--border);
+    transition:all .25s ease;outline:none;
+  }
+  .btn svg{width:18px;height:18px}
+  .btn-primary{
+    background:linear-gradient(135deg,var(--accent),var(--accent-dark));
+    color:#fff;border-color:transparent;
+    box-shadow:0 4px 20px rgba(124,92,252,.3);
+  }
+  .btn-primary:hover{box-shadow:0 4px 28px rgba(124,92,252,.5);transform:translateY(-1px)}
+  .btn-ghost{background:var(--card);color:var(--text)}
+  .btn-ghost:hover{background:var(--card-hover);border-color:var(--border-glow)}
+  .btn-danger{background:var(--red-dim);color:var(--red);border-color:rgba(255,68,102,.2)}
+  .btn-danger:hover{background:rgba(255,68,102,.2)}
+
+  /* Face count badge */
+  .face-badge{
+    position:absolute;top:14px;right:14px;z-index:5;
+    background:var(--glass);backdrop-filter:blur(12px);
+    border:1px solid var(--glass-border);border-radius:30px;
+    padding:6px 16px;font-size:.78rem;font-weight:600;
+    display:flex;align-items:center;gap:6px;
+    transition:all .3s;
+  }
+  .face-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+
+  /* ─── Side Panel ─── */
+  .side-panel{display:flex;flex-direction:column;gap:16px}
+  .panel-card{
+    background:var(--card);border:1px solid var(--border);
+    border-radius:var(--radius);padding:22px;
+    transition:border-color .3s,box-shadow .3s;
+  }
+  .panel-card:hover{border-color:var(--border-glow);box-shadow:0 0 30px rgba(124,92,252,.05)}
+  .panel-card h3{
+    font-size:.82rem;font-weight:600;text-transform:uppercase;
+    letter-spacing:1px;color:var(--text-dim);margin-bottom:16px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .panel-card h3 .icon-circle{
+    width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-size:14px;
+  }
+
+  /* Profile card */
+  .profile-section{text-align:center}
+  .profile-avatar{
+    width:84px;height:84px;border-radius:50%;
+    background:linear-gradient(135deg,var(--accent),var(--blue));
+    margin:0 auto 14px;display:grid;place-items:center;
+    font-size:32px;border:3px solid var(--card);
+    box-shadow:0 0 24px rgba(124,92,252,.2);
+    position:relative;
+  }
+  .profile-avatar::after{
+    content:'';position:absolute;inset:-4px;border-radius:50%;
+    border:2px solid transparent;
+    border-top-color:var(--accent-light);
+    animation:spin 3s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .profile-name{font-size:1.15rem;font-weight:700;margin-bottom:2px}
+  .profile-id{font-size:.78rem;color:var(--text-muted);margin-bottom:14px}
+  .profile-stats{
+    display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px;
+  }
+  .stat-box{
+    background:var(--surface);border-radius:var(--radius-xs);padding:10px 6px;
+  }
+  .stat-box .val{font-size:1.05rem;font-weight:700;color:var(--accent-light)}
+  .stat-box .lbl{font-size:.68rem;color:var(--text-muted);margin-top:2px}
+  .profile-tags{display:flex;gap:6px;justify-content:center;margin-top:14px;flex-wrap:wrap}
+  .tag{
+    padding:4px 12px;border-radius:20px;font-size:.72rem;font-weight:600;
+  }
+  .tag.verified{background:var(--green-dim);color:var(--green)}
+  .tag.member{background:var(--blue-dim);color:var(--blue)}
+
+  /* Action grid */
+  .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .action-btn{
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+    padding:18px 10px;border-radius:var(--radius-sm);
+    background:var(--surface);border:1px solid var(--border);
+    cursor:pointer;transition:all .25s;text-decoration:none;color:var(--text);
+    font-family:inherit;
+  }
+  .action-btn:hover{
+    border-color:var(--border-glow);transform:translateY(-2px);
+    box-shadow:0 8px 24px rgba(0,0,0,.3);
+  }
+  .action-btn .a-icon{
+    width:44px;height:44px;border-radius:12px;
+    display:grid;place-items:center;font-size:20px;
+  }
+  .action-btn .a-label{font-size:.78rem;font-weight:600}
+  .action-btn .a-sub{font-size:.65rem;color:var(--text-muted)}
+
+  .a-icon.web{background:var(--blue-dim);color:var(--blue)}
+  .a-icon.video{background:var(--red-dim);color:var(--red)}
+  .a-icon.pay{background:var(--green-dim);color:var(--green)}
+  .a-icon.info{background:var(--orange-dim);color:var(--orange)}
+
+  /* Log section */
+  .log-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto}
+  .log-list::-webkit-scrollbar{width:4px}
+  .log-list::-webkit-scrollbar-thumb{background:var(--text-muted);border-radius:4px}
+  .log-item{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 12px;border-radius:var(--radius-xs);
+    background:var(--surface);font-size:.8rem;
+    animation:fadeSlideIn .3s ease;
+  }
+  @keyframes fadeSlideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  .log-item .log-time{color:var(--text-muted);font-size:.7rem;white-space:nowrap}
+  .log-item .log-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .log-item .log-msg{flex:1}
+
+  /* Modal Overlay */
+  .modal-overlay{
+    position:fixed;inset:0;z-index:100;
+    display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.65);backdrop-filter:blur(8px);
+    animation:fadeIn .25s ease;
+  }
+  .modal-overlay.show{display:flex}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .modal{
+    background:var(--card);border:1px solid var(--border);
+    border-radius:var(--radius);padding:28px;
+    width:90%;max-width:520px;position:relative;
+    animation:modalPop .3s ease;
+  }
+  @keyframes modalPop{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+  .modal-close{
+    position:absolute;top:14px;right:14px;
+    background:none;border:none;color:var(--text-dim);
+    font-size:20px;cursor:pointer;width:32px;height:32px;
+    border-radius:8px;display:grid;place-items:center;
+    transition:background .2s;
+  }
+  .modal-close:hover{background:var(--surface)}
+  .modal h2{font-size:1.15rem;font-weight:700;margin-bottom:18px;display:flex;align-items:center;gap:10px}
+
+  /* Payment form */
+  .pay-form{display:flex;flex-direction:column;gap:14px}
+  .pay-form label{font-size:.78rem;font-weight:600;color:var(--text-dim)}
+  .pay-form input, .pay-form select{
+    width:100%;padding:12px 16px;border-radius:var(--radius-xs);
+    background:var(--surface);border:1px solid var(--border);
+    color:var(--text);font-family:inherit;font-size:.9rem;
+    outline:none;transition:border-color .2s;
+  }
+  .pay-form input:focus, .pay-form select:focus{border-color:var(--accent)}
+  .pay-amount{
+    font-size:2rem;font-weight:800;text-align:center;
+    padding:20px;background:var(--surface);border-radius:var(--radius-sm);
+    margin-bottom:4px;
+  }
+  .pay-amount span{color:var(--green)}
+
+  /* Video player */
+  .video-container{
+    position:relative;border-radius:var(--radius-sm);overflow:hidden;
+    aspect-ratio:16/9;background:#000;
+  }
+  .video-container iframe{width:100%;height:100%;border:none}
+
+  /* Info panel in modal */
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .info-item{
+    padding:14px;background:var(--surface);border-radius:var(--radius-xs);
+  }
+  .info-item .info-label{font-size:.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+  .info-item .info-val{font-size:.95rem;font-weight:600;margin-top:4px}
+
+  /* Toast */
+  .toast-container{position:fixed;top:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px}
+  .toast{
+    padding:14px 22px;border-radius:var(--radius-sm);
+    background:var(--card);border:1px solid var(--border);
+    font-size:.85rem;display:flex;align-items:center;gap:10px;
+    box-shadow:var(--shadow);animation:toastIn .3s ease;
+    backdrop-filter:blur(12px);
+  }
+  @keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
+  .toast.success{border-color:rgba(34,214,122,.3)}
+  .toast.error{border-color:rgba(255,68,102,.3)}
+
+  /* Responsive */
+  @media(max-width:960px){
+    header{padding:14px 16px}
+    .logo h1{font-size:1.1rem}
+    .side-panel{order:-1}
+  }
+  @media(max-width:600px){
+    .action-grid{grid-template-columns:1fr}
+    .info-grid{grid-template-columns:1fr}
+    .profile-stats{grid-template-columns:1fr 1fr}
+  }
+
+  /* Detected face highlight border animation */
+  .camera-wrapper.face-detected{
+    border-color:var(--accent);
+    box-shadow:var(--shadow),0 0 40px rgba(124,92,252,.15);
+  }
+  .no-face-msg{
+    font-size:.82rem;color:var(--text-muted);text-align:center;padding:24px 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">👁</div>
+    <h1>Face<span>Link</span></h1>
+  </div>
+  <div class="header-status">
+    <div class="status-dot inactive" id="statusDot"></div>
+    <span id="statusText">Camera Off</span>
+  </div>
+</header>
+
+<!-- Main -->
+<main>
+  <!-- Camera -->
+  <div class="camera-section">
+    <div class="camera-wrapper" id="cameraWrapper">
+      <div class="camera-placeholder" id="cameraPlaceholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+        <p>Click "Start Camera" to begin face detection</p>
+      </div>
+      <video id="webcam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="scan-line" id="scanLine"></div>
+      <div class="face-badge" id="faceBadge" style="display:none">
+        <span class="dot"></span>
+        <span id="faceCount">0 faces</span>
+      </div>
+    </div>
+    <div class="cam-controls">
+      <button class="btn btn-primary" id="btnStart" onclick="startCamera()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+        Start Camera
+      </button>
+      <button class="btn btn-danger" id="btnStop" onclick="stopCamera()" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" fill="currentColor"/></svg>
+        Stop
+      </button>
+      <button class="btn btn-ghost" onclick="captureSnapshot()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+        Snapshot
+      </button>
+    </div>
+  </div>
+
+  <!-- Side Panel -->
+  <div class="side-panel">
+
+    <!-- Profile -->
+    <div class="panel-card" id="profileCard">
+      <h3><span class="icon-circle" style="background:var(--blue-dim);color:var(--blue)">👤</span> Detected Profile</h3>
+      <div id="profileContent">
+        <p class="no-face-msg">No face detected yet.<br>Start the camera to scan.</p>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="panel-card">
+      <h3><span class="icon-circle" style="background:var(--accent);background:linear-gradient(135deg,var(--accent),var(--blue));color:#fff">⚡</span> Quick Actions</h3>
+      <div class="action-grid">
+        <button class="action-btn" id="actionInfo" onclick="openInfoModal()">
+          <div class="a-icon info">🔍</div>
+          <span class="a-label">View Info</span>
+          <span class="a-sub">Online profile</span>
+        </button>
+        <button class="action-btn" id="actionWeb" onclick="openWebsite()">
+          <div class="a-icon web">🌐</div>
+          <span class="a-label">Open Web</span>
+          <span class="a-sub">Launch website</span>
+        </button>
+        <button class="action-btn" id="actionVideo" onclick="openVideoModal()">
+          <div class="a-icon video">▶️</div>
+          <span class="a-label">Play Video</span>
+          <span class="a-sub">Stream media</span>
+        </button>
+        <button class="action-btn" id="actionPay" onclick="openPaymentModal()">
+          <div class="a-icon pay">💳</div>
+          <span class="a-label">Pay Now</span>
+          <span class="a-sub">Quick transfer</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="panel-card">
+      <h3><span class="icon-circle" style="background:var(--green-dim);color:var(--green)">📋</span> Activity Log</h3>
+      <div class="log-list" id="logList">
+        <div class="log-item">
+          <span class="log-dot" style="background:var(--text-muted)"></span>
+          <span class="log-msg">System initialized</span>
+          <span class="log-time">now</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<!-- Info Modal -->
+<div class="modal-overlay" id="infoModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('infoModal')">✕</button>
+    <h2>🔍 Online Information</h2>
+    <div class="info-grid" id="infoGrid">
+      <div class="info-item"><div class="info-label">Full Name</div><div class="info-val" id="infoName">—</div></div>
+      <div class="info-item"><div class="info-label">Confidence</div><div class="info-val" id="infoConf">—</div></div>
+      <div class="info-item"><div class="info-label">Age Estimate</div><div class="info-val" id="infoAge">—</div></div>
+      <div class="info-item"><div class="info-label">Location</div><div class="info-val" id="infoLoc">—</div></div>
+      <div class="info-item"><div class="info-label">Last Seen</div><div class="info-val" id="infoSeen">—</div></div>
+      <div class="info-item"><div class="info-label">Threat Level</div><div class="info-val" id="infoThreat" style="color:var(--green)">—</div></div>
+    </div>
+    <div style="margin-top:18px;text-align:center">
+      <button class="btn btn-primary" onclick="closeModal('infoModal')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Video Modal -->
+<div class="modal-overlay" id="videoModal">
+  <div class="modal" style="max-width:680px">
+    <button class="modal-close" onclick="closeVideoModal()">✕</button>
+    <h2>▶️ Video Player</h2>
+    <div class="video-container" id="videoContainer">
+      <!-- Embedded on open -->
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="loadVideo('dQw4w9WgXcQ')">🎵 Music</button>
+      <button class="btn btn-ghost" onclick="loadVideo('jNQXAC9IVRw')">📹 Classic</button>
+      <button class="btn btn-ghost" onclick="loadVideo('9bZkp7q19f0')">🌏 Trending</button>
+    </div>
+  </div>
+</div>
+
+<!-- Payment Modal -->
+<div class="modal-overlay" id="payModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('payModal')">✕</button>
+    <h2>💳 Quick Payment</h2>
+    <div class="pay-form">
+      <div class="pay-amount">$<span id="payAmountDisplay">0.00</span></div>
+      <div>
+        <label>Recipient</label>
+        <input type="text" id="payRecipient" placeholder="Name or ID" value="">
+      </div>
+      <div>
+        <label>Amount (USD)</label>
+        <input type="number" id="payAmount" placeholder="0.00" min="0" step="0.01" oninput="updatePayDisplay()">
+      </div>
+      <div>
+        <label>Method</label>
+        <select id="payMethod">
+          <option>💳 Credit Card</option>
+          <option>📱 Mobile Pay</option>
+          <option>🏦 Bank Transfer</option>
+          <option>₿ Crypto</option>
+        </select>
+      </div>
+      <div>
+        <label>Note</label>
+        <input type="text" id="payNote" placeholder="Optional note...">
+      </div>
+      <button class="btn btn-primary" onclick="processPayment()" style="width:100%;justify-content:center;margin-top:6px">
+        Confirm Payment
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  // ── State ──
+  let model = null;
+  let stream = null;
+  let detecting = false;
+  let animFrame = null;
+  let faceDetected = false;
+  let detectionCount = 0;
+
+  const video = document.getElementById('webcam');
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d');
+
+  // ── Simulated profile data ──
+  const profiles = [
+    { name:'Alex Morgan', id:'USR-4821', age:'28', loc:'San Francisco, CA', tags:['verified','member'], trust:92, sessions:147, devices:3 },
+    { name:'Priya Sharma', id:'USR-7193', age:'34', loc:'Mumbai, IN', tags:['verified'], trust:88, sessions:203, devices:2 },
+    { name:'Liam Chen', id:'USR-0562', age:'25', loc:'Toronto, CA', tags:['member'], trust:95, sessions:89, devices:4 },
+    { name:'Sofia Rivera', id:'USR-3347', age:'31', loc:'Madrid, ES', tags:['verified','member'], trust:91, sessions:312, devices:2 },
+  ];
+  let activeProfile = null;
+
+  // ── Camera ──
+  async function startCamera() {
+    try {
+      setStatus('loading', 'Initializing…');
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode:'user', width:{ideal:1280}, height:{ideal:960} }
+      });
+      video.srcObject = stream;
+      video.style.display = 'block';
+      document.getElementById('cameraPlaceholder').style.display = 'none';
+      document.getElementById('btnStart').style.display = 'none';
+      document.getElementById('btnStop').style.display = 'inline-flex';
+
+      await video.play();
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      setStatus('loading', 'Loading AI model…');
+      addLog('Camera started', 'blue');
+
+      if (!model) {
+        model = await blazeface.load();
+        addLog('BlazeFace model loaded', 'green');
+      }
+
+      setStatus('active', 'Detecting');
+      document.getElementById('scanLine').classList.add('active');
+      detecting = true;
+      detectLoop();
+    } catch (e) {
+      setStatus('inactive', 'Camera denied');
+      addLog('Camera error: ' + e.message, 'red');
+      showToast('Camera access denied or unavailable', 'error');
+    }
+  }
+
+  function stopCamera() {
+    detecting = false;
+    if (animFrame) cancelAnimationFrame(animFrame);
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
+    video.style.display = 'block';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    document.getElementById('cameraPlaceholder').style.display = 'flex';
+    document.getElementById('btnStart').style.display = 'inline-flex';
+    document.getElementById('btnStop').style.display = 'none';
+    document.getElementById('scanLine').classList.remove('active');
+    document.getElementById('faceBadge').style.display = 'none';
+    document.getElementById('cameraWrapper').classList.remove('face-detected');
+    setStatus('inactive', 'Camera Off');
+    addLog('Camera stopped', 'orange');
+    faceDetected = false;
+  }
+
+  // ── Detection Loop ──
+  async function detectLoop() {
+    if (!detecting || !model) return;
+    try {
+      const predictions = await model.estimateFaces(video, false);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const badge = document.getElementById('faceBadge');
+      const wrapper = document.getElementById('cameraWrapper');
+
+      if (predictions.length > 0) {
+        badge.style.display = 'flex';
+        document.getElementById('faceCount').textContent =
+          predictions.length + (predictions.length === 1 ? ' face' : ' faces');
+        wrapper.classList.add('face-detected');
+
+        predictions.forEach((pred, i) => {
+          const start = pred.topLeft;
+          const end = pred.bottomRight;
+          const x = start[0], y = start[1];
+          const w = end[0] - start[0], h = end[1] - start[1];
+
+          // Draw box
+          ctx.strokeStyle = '#7c5cfc';
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([6, 4]);
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]);
+
+          // Corner accents
+          const cl = 14;
+          ctx.strokeStyle = '#9b82ff';
+          ctx.lineWidth = 3;
+          // top-left
+          ctx.beginPath(); ctx.moveTo(x, y + cl); ctx.lineTo(x, y); ctx.lineTo(x + cl, y); ctx.stroke();
+          // top-right
+          ctx.beginPath(); ctx.moveTo(x + w - cl, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cl); ctx.stroke();
+          // bottom-left
+          ctx.beginPath(); ctx.moveTo(x, y + h - cl); ctx.lineTo(x, y + h); ctx.lineTo(x + cl, y + h); ctx.stroke();
+          // bottom-right
+          ctx.beginPath(); ctx.moveTo(x + w - cl, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cl); ctx.stroke();
+
+          // Landmarks
+          if (pred.landmarks) {
+            ctx.fillStyle = '#22d67a';
+            pred.landmarks.forEach(pt => {
+              ctx.beginPath();
+              ctx.arc(pt[0], pt[1], 3, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+
+          // Label
+          const conf = pred.probability ? (pred.probability[0] * 100).toFixed(1) : '—';
+          ctx.font = '600 13px Inter, sans-serif';
+          const label = `Face ${i + 1} • ${conf}%`;
+          const tw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(124,92,252,.85)';
+          ctx.beginPath();
+          ctx.roundRect(x, y - 26, tw + 16, 22, 4);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.fillText(label, x + 8, y - 10);
+        });
+
+        // Assign profile on first detection
+        if (!faceDetected) {
+          faceDetected = true;
+          detectionCount++;
+          activeProfile = profiles[detectionCount % profiles.length];
+          renderProfile(activeProfile);
+          addLog(`Face identified: ${activeProfile.name}`, 'green');
+          showToast(`Identified: ${activeProfile.name}`, 'success');
+        }
+      } else {
+        badge.style.display = 'none';
+        wrapper.classList.remove('face-detected');
+        if (faceDetected) {
+          faceDetected = false;
+          addLog('Face lost', 'orange');
+        }
+      }
+    } catch (e) {
+      console.error('Detection error:', e);
+    }
+    animFrame = requestAnimationFrame(detectLoop);
+  }
+
+  // ── Profile Rendering ──
+  function renderProfile(p) {
+    document.getElementById('profileContent').innerHTML = `
+      <div class="profile-section">
+        <div class="profile-avatar">${p.name.charAt(0)}</div>
+        <div class="profile-name">${p.name}</div>
+        <div class="profile-id">${p.id}</div>
+        <div class="profile-tags">
+          ${p.tags.map(t => `<span class="tag ${t}">${t.charAt(0).toUpperCase()+t.slice(1)}</span>`).join('')}
+        </div>
+        <div class="profile-stats">
+          <div class="stat-box"><div class="val">${p.trust}%</div><div class="lbl">Trust</div></div>
+          <div class="stat-box"><div class="val">${p.sessions}</div><div class="lbl">Sessions</div></div>
+          <div class="stat-box"><div class="val">${p.devices}</div><div class="lbl">Devices</div></div>
+        </div>
+      </div>
+    `;
+    // Pre-fill payment recipient
+    document.getElementById('payRecipient').value = p.name;
+  }
+
+  // ── Actions ──
+  function openInfoModal() {
+    if (!activeProfile) { showToast('No face detected yet', 'error'); return; }
+    const p = activeProfile;
+    document.getElementById('infoName').textContent = p.name;
+    document.getElementById('infoConf').textContent = p.trust + '%';
+    document.getElementById('infoAge').textContent = p.age + ' years';
+    document.getElementById('infoLoc').textContent = p.loc;
+    document.getElementById('infoSeen').textContent = 'Just now';
+    document.getElementById('infoThreat').textContent = 'None';
+    document.getElementById('infoThreat').style.color = 'var(--green)';
+    document.getElementById('infoModal').classList.add('show');
+    addLog('Viewed info: ' + p.name, 'blue');
+  }
+
+  function openWebsite() {
+    const url = 'https://www.google.com';
+    window.open(url, '_blank');
+    addLog('Opened website', 'blue');
+    showToast('Website opened in new tab', 'success');
+  }
+
+  function openVideoModal() {
+    document.getElementById('videoModal').classList.add('show');
+    loadVideo('dQw4w9WgXcQ');
+    addLog('Opened video player', 'red');
+  }
+
+  function loadVideo(id) {
+    document.getElementById('videoContainer').innerHTML =
+      `<iframe src="https://www.youtube.com/embed/${id}?autoplay=1&rel=0" allow="autoplay;encrypted-media" allowfullscreen></iframe>`;
+  }
+
+  function closeVideoModal() {
+    document.getElementById('videoContainer').innerHTML = '';
+    closeModal('videoModal');
+  }
+
+  function openPaymentModal() {
+    if (!activeProfile) { showToast('Detect a face first to assign recipient', 'error'); return; }
+    document.getElementById('payModal').classList.add('show');
+    addLog('Opened payment panel', 'green');
+  }
+
+  function updatePayDisplay() {
+    const v = parseFloat(document.getElementById('payAmount').value) || 0;
+    document.getElementById('payAmountDisplay').textContent = v.toFixed(2);
+  }
+
+  function processPayment() {
+    const amt = parseFloat(document.getElementById('payAmount').value);
+    const to = document.getElementById('payRecipient').value;
+    const method = document.getElementById('payMethod').value;
+    if (!amt || amt <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (!to) { showToast('Enter a recipient', 'error'); return; }
+    showToast(`$${amt.toFixed(2)} sent to ${to} via ${method}`, 'success');
+    addLog(`Payment $${amt.toFixed(2)} → ${to}`, 'green');
+    closeModal('payModal');
+    document.getElementById('payAmount').value = '';
+    updatePayDisplay();
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.remove('show');
+  }
+
+  // Close modals on overlay click
+  document.querySelectorAll('.modal-overlay').forEach(el => {
+    el.addEventListener('click', e => {
+      if (e.target === el) {
+        if (el.id === 'videoModal') closeVideoModal();
+        else closeModal(el.id);
+      }
+    });
+  });
+
+  // ── Snapshot ──
+  function captureSnapshot() {
+    if (!stream) { showToast('Start the camera first', 'error'); return; }
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = video.videoWidth;
+    tmpCanvas.height = video.videoHeight;
+    const tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.drawImage(video, 0, 0);
+    // Draw overlay
+    tmpCtx.drawImage(canvas, 0, 0);
+    const link = document.createElement('a');
+    link.download = `facelink_snapshot_${Date.now()}.png`;
+    link.href = tmpCanvas.toDataURL('image/png');
+    link.click();
+    addLog('Snapshot saved', 'blue');
+    showToast('Snapshot downloaded', 'success');
+  }
+
+  // ── Helpers ──
+  function setStatus(state, text) {
+    const dot = document.getElementById('statusDot');
+    dot.className = 'status-dot ' + state;
+    document.getElementById('statusText').textContent = text;
+  }
+
+  function addLog(msg, color) {
+    const list = document.getElementById('logList');
+    const now = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const colors = { green:'var(--green)', red:'var(--red)', blue:'var(--blue)', orange:'var(--orange)' };
+    const item = document.createElement('div');
+    item.className = 'log-item';
+    item.innerHTML = `
+      <span class="log-dot" style="background:${colors[color]||'var(--text-muted)'}"></span>
+      <span class="log-msg">${msg}</span>
+      <span class="log-time">${now}</span>
+    `;
+    list.prepend(item);
+    // keep max 30 items
+    while (list.children.length > 30) list.lastChild.remove();
+  }
+
+  function showToast(msg, type) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast ' + type;
+    toast.innerHTML = `${type === 'success' ? '✅' : '❌'} ${msg}`;
+    container.appendChild(toast);
+    setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateX(40px)'; toast.style.transition = 'all .3s'; }, 3000);
+    setTimeout(() => toast.remove(), 3400);
+  }
+
+  // ── Keyboard shortcut ──
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => {
+        if (m.id === 'videoModal') closeVideoModal();
+        else closeModal(m.id);
+      });
+    }
+  });
+</script>
+</body>
+</html>
